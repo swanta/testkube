@@ -5,17 +5,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"golang.org/x/oauth2"
+
 	"github.com/kubeshop/testkube/pkg/executor/output"
-	phttp "github.com/kubeshop/testkube/pkg/http"
 	"github.com/kubeshop/testkube/pkg/oauth"
 	"github.com/kubeshop/testkube/pkg/problem"
-	"golang.org/x/oauth2"
 )
 
 type transport struct {
@@ -37,29 +36,37 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return base.RoundTrip(req)
 }
 
-// GetHTTPClient prepares http client
-func GetHTTTPClient(token *oauth2.Token) (*http.Client, error) {
-	httpClient := phttp.NewClient()
+func ConfigureClient(client *http.Client, token *oauth2.Token, cloudApiKey string) {
 	if token != nil {
-		httpClient.Transport = &transport{headers: map[string]string{
+		client.Transport = &transport{headers: map[string]string{
 			"Authorization": oauth.AuthorizationPrefix + " " + token.AccessToken}}
 	}
-
-	return httpClient, nil
+	if cloudApiKey != "" {
+		client.Transport = &transport{headers: map[string]string{
+			"Authorization": "Bearer " + cloudApiKey}}
+	}
 }
 
 // NewDirectClient returns new direct client
-func NewDirectClient[A All](httpClient *http.Client, apiURI string) DirectClient[A] {
+func NewDirectClient[A All](httpClient *http.Client, apiURI, apiPathPrefix string) DirectClient[A] {
+	if apiPathPrefix == "" {
+		apiPathPrefix = "/" + Version
+	}
+
 	return DirectClient[A]{
-		client: httpClient,
-		apiURI: apiURI,
+		client:        httpClient,
+		sseClient:     httpClient,
+		apiURI:        apiURI,
+		apiPathPrefix: apiPathPrefix,
 	}
 }
 
 // DirectClient implements direct client
 type DirectClient[A All] struct {
-	client *http.Client
-	apiURI string
+	client        *http.Client
+	sseClient     *http.Client
+	apiURI        string
+	apiPathPrefix string
 }
 
 // baseExecute is base execute method
@@ -95,6 +102,11 @@ func (t DirectClient[A]) baseExec(method, uri, resource string, body []byte, par
 	return resp, nil
 }
 
+func (t DirectClient[A]) WithSSEClient(client *http.Client) DirectClient[A] {
+	t.sseClient = client
+	return t
+}
+
 // Execute is a method to make an api call for a single object
 func (t DirectClient[A]) Execute(method, uri string, body []byte, params map[string]string) (result A, err error) {
 	resp, err := t.baseExec(method, uri, fmt.Sprintf("%T", result), body, params)
@@ -119,14 +131,18 @@ func (t DirectClient[A]) ExecuteMultiple(method, uri string, body []byte, params
 
 // Delete is a method to make delete api call
 func (t DirectClient[A]) Delete(uri, selector string, isContentExpected bool) error {
-	resp, err := t.baseExec(http.MethodDelete, uri, uri, nil, map[string]string{"selector": selector})
+	return t.ExecuteMethod(http.MethodDelete, uri, selector, isContentExpected)
+}
+
+func (t DirectClient[A]) ExecuteMethod(method, uri string, selector string, isContentExpected bool) error {
+	resp, err := t.baseExec(method, uri, uri, nil, map[string]string{"selector": selector})
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 
 	if isContentExpected && resp.StatusCode != http.StatusNoContent {
-		respBody, err := ioutil.ReadAll(resp.Body)
+		respBody, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return err
 		}
@@ -140,7 +156,7 @@ func (t DirectClient[A]) Delete(uri, selector string, isContentExpected bool) er
 // GetURI returns uri for api method
 func (t DirectClient[A]) GetURI(pathTemplate string, params ...interface{}) string {
 	path := fmt.Sprintf(pathTemplate, params...)
-	return fmt.Sprintf("%s/%s%s", t.apiURI, Version, path)
+	return fmt.Sprintf("%s%s%s", t.apiURI, t.apiPathPrefix, path)
 }
 
 // GetLogs returns logs stream from job pods, based on job pods logs
@@ -151,7 +167,7 @@ func (t DirectClient[A]) GetLogs(uri string, logs chan output.Output) error {
 	}
 
 	req.Header.Set("Accept", "text/event-stream")
-	resp, err := t.client.Do(req)
+	resp, err := t.sseClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -210,7 +226,7 @@ func (t DirectClient[A]) responseError(resp *http.Response) error {
 	if resp.StatusCode >= 400 {
 		var pr problem.Problem
 
-		bytes, err := ioutil.ReadAll(resp.Body)
+		bytes, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return fmt.Errorf("can't get problem from api response: can't read response body %w", err)
 		}

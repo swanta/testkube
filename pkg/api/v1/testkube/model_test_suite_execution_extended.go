@@ -1,15 +1,16 @@
 package testkube
 
 import (
-	"fmt"
 	"time"
 
-	"github.com/kubeshop/testkube/pkg/rand"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+
+	"github.com/kubeshop/testkube/internal/common"
+	"github.com/kubeshop/testkube/pkg/utils"
 )
 
-func NewQueuedTestSuiteExecution(name, namespace string) TestSuiteExecution {
-	return TestSuiteExecution{
+func NewQueuedTestSuiteExecution(name, namespace string) *TestSuiteExecution {
+	return &TestSuiteExecution{
 		TestSuite: &ObjectRef{
 			Name:      name,
 			Namespace: namespace,
@@ -19,14 +20,20 @@ func NewQueuedTestSuiteExecution(name, namespace string) TestSuiteExecution {
 }
 
 func NewStartedTestSuiteExecution(testSuite TestSuite, request TestSuiteExecutionRequest) TestSuiteExecution {
+
 	testExecution := TestSuiteExecution{
-		Id:        primitive.NewObjectID().Hex(),
-		StartTime: time.Now(),
-		Name:      fmt.Sprintf("%s.%s", testSuite.Name, rand.Name()),
-		Status:    TestSuiteExecutionStatusRunning,
-		Variables: testSuite.Variables,
-		TestSuite: testSuite.GetObjectRef(),
-		Labels:    testSuite.Labels,
+		Id:         primitive.NewObjectID().Hex(),
+		StartTime:  time.Now(),
+		Name:       request.Name,
+		Status:     TestSuiteExecutionStatusRunning,
+		SecretUUID: request.SecretUUID,
+		TestSuite:  testSuite.GetObjectRef(),
+		Labels:     common.MergeMaps(testSuite.Labels, request.ExecutionLabels),
+		Variables:  map[string]Variable{},
+	}
+
+	if testSuite.ExecutionRequest != nil {
+		testExecution.Variables = testSuite.ExecutionRequest.Variables
 	}
 
 	// override variables from request
@@ -45,8 +52,27 @@ func NewStartedTestSuiteExecution(testSuite TestSuite, request TestSuiteExecutio
 	return testExecution
 }
 
+func (e TestSuiteExecution) FailedStepsCount() (count int) {
+	for _, stepResult := range e.StepResults {
+		if stepResult.Execution.IsFailed() {
+			count++
+		}
+	}
+	return
+}
+
 func (e TestSuiteExecution) IsCompleted() bool {
-	return *e.Status == *TestSuiteExecutionStatusFailed || *e.Status == *TestSuiteExecutionStatusPassed
+	return *e.Status == *TestSuiteExecutionStatusFailed ||
+		*e.Status == *TestSuiteExecutionStatusPassed ||
+		*e.Status == *TestSuiteExecutionStatusAborted ||
+		*e.Status == *TestSuiteExecutionStatusTimeout
+}
+
+func (e *TestSuiteExecution) Stop() {
+	duration := e.CalculateDuration()
+	e.EndTime = time.Now()
+	e.Duration = utils.RoundDuration(duration).String()
+	e.DurationMs = int32(duration.Milliseconds())
 }
 
 func (e *TestSuiteExecution) CalculateDuration() time.Duration {

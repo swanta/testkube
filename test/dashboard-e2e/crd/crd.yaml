@@ -1,0 +1,25 @@
+apiVersion: tests.testkube.io/v3
+kind: Test
+metadata:
+  name: dashboard-e2e-tests
+  namespace: testkube
+  labels:
+    core-tests: dashboard-e2e
+spec:
+  type: cypress/project
+  content:
+    type: git-dir
+    repository:
+      type: git
+      uri: https://github.com/kubeshop/testkube
+      branch: main
+      path: test/dashboard-e2e
+  executionRequest:
+    args:
+      - --config
+      - baseUrl=http://testkube-dashboard.testkube.svc.cluster.local:8080
+      - --env
+      - API_URL=http://testkube-api-server.testkube.svc.cluster.local:8088/v1
+    # envs:
+    #   DEBUG: cypress:*
+  schedule: "15 */4 * * *"

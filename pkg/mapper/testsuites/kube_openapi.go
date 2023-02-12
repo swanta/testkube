@@ -1,13 +1,15 @@
 package testsuites
 
 import (
+	corev1 "k8s.io/api/core/v1"
+
 	commonv1 "github.com/kubeshop/testkube-operator/apis/common/v1"
-	testsuitesv1 "github.com/kubeshop/testkube-operator/apis/testsuite/v1"
+	testsuitesv2 "github.com/kubeshop/testkube-operator/apis/testsuite/v2"
 	"github.com/kubeshop/testkube/pkg/api/v1/testkube"
 )
 
 // MapTestSuiteListKubeToAPI maps TestSuiteList CRD to list of OpenAPI spec TestSuite
-func MapTestSuiteListKubeToAPI(cr testsuitesv1.TestSuiteList) (tests []testkube.TestSuite) {
+func MapTestSuiteListKubeToAPI(cr testsuitesv2.TestSuiteList) (tests []testkube.TestSuite) {
 	tests = make([]testkube.TestSuite, len(cr.Items))
 	for i, item := range cr.Items {
 		tests[i] = MapCRToAPI(item)
@@ -17,10 +19,9 @@ func MapTestSuiteListKubeToAPI(cr testsuitesv1.TestSuiteList) (tests []testkube.
 }
 
 // MapCRToAPI maps TestSuite CRD to OpenAPI spec TestSuite
-func MapCRToAPI(cr testsuitesv1.TestSuite) (test testkube.TestSuite) {
+func MapCRToAPI(cr testsuitesv2.TestSuite) (test testkube.TestSuite) {
 	test.Name = cr.Name
 	test.Namespace = cr.Namespace
-	test.Description = cr.Spec.Description
 
 	for _, s := range cr.Spec.Before {
 		test.Before = append(test.Before, mapCRStepToAPI(s))
@@ -36,14 +37,14 @@ func MapCRToAPI(cr testsuitesv1.TestSuite) (test testkube.TestSuite) {
 	test.Repeats = int32(cr.Spec.Repeats)
 	test.Labels = cr.Labels
 	test.Schedule = cr.Spec.Schedule
-	test.Variables = MergeVariablesAndParams(cr.Spec.Variables, cr.Spec.Params)
 	test.Created = cr.CreationTimestamp.Time
-
+	test.ExecutionRequest = MapExecutionRequestFromSpec(cr.Spec.ExecutionRequest)
+	test.Status = MapStatusFromSpec(cr.Status)
 	return
 }
 
 // mapCRStepToAPI maps CRD TestSuiteStepSpec to OpenAPI spec TestSuiteStep
-func mapCRStepToAPI(crstep testsuitesv1.TestSuiteStepSpec) (teststep testkube.TestSuiteStep) {
+func mapCRStepToAPI(crstep testsuitesv2.TestSuiteStepSpec) (teststep testkube.TestSuiteStep) {
 
 	switch true {
 	case crstep.Execute != nil:
@@ -78,19 +79,32 @@ func MapDepratcatedParams(in map[string]testkube.Variable) map[string]string {
 
 // MapCRDVariables maps variables between API and operator CRDs
 // TODO if we could merge operator into testkube repository we would get rid of those mappings
-func MapCRDVariables(in map[string]testkube.Variable) map[string]testsuitesv1.Variable {
-	out := map[string]testsuitesv1.Variable{}
+func MapCRDVariables(in map[string]testkube.Variable) map[string]testsuitesv2.Variable {
+	out := map[string]testsuitesv2.Variable{}
 	for k, v := range in {
-		out[k] = testsuitesv1.Variable{
+		variable := testsuitesv2.Variable{
 			Name:  v.Name,
 			Type_: string(*v.Type_),
 			Value: v.Value,
 		}
+
+		if v.SecretRef != nil {
+			variable.ValueFrom = corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: v.SecretRef.Name,
+					},
+					Key: v.SecretRef.Key,
+				},
+			}
+		}
+
+		out[k] = variable
 	}
 	return out
 }
 
-func MergeVariablesAndParams(variables map[string]testsuitesv1.Variable, params map[string]string) map[string]testkube.Variable {
+func MergeVariablesAndParams(variables map[string]testsuitesv2.Variable, params map[string]string) map[string]testkube.Variable {
 	out := map[string]testkube.Variable{}
 	for k, v := range params {
 		out[k] = testkube.NewBasicVariable(k, v)
@@ -98,7 +112,11 @@ func MergeVariablesAndParams(variables map[string]testsuitesv1.Variable, params 
 
 	for k, v := range variables {
 		if v.Type_ == commonv1.VariableTypeSecret {
-			out[k] = testkube.NewSecretVariable(v.Name, v.Value)
+			if v.ValueFrom.SecretKeyRef == nil {
+				out[k] = testkube.NewSecretVariable(v.Name, v.Value)
+			} else {
+				out[k] = testkube.NewSecretVariableReference(v.Name, v.ValueFrom.SecretKeyRef.Name, v.ValueFrom.SecretKeyRef.Key)
+			}
 		}
 		if v.Type_ == commonv1.VariableTypeBasic {
 			out[k] = testkube.NewBasicVariable(v.Name, v.Value)
@@ -106,4 +124,40 @@ func MergeVariablesAndParams(variables map[string]testsuitesv1.Variable, params 
 	}
 
 	return out
+}
+
+// MapExecutionRequestFromSpec maps CRD to OpenAPI spec ExecutionRequest
+func MapExecutionRequestFromSpec(specExecutionRequest *testsuitesv2.TestSuiteExecutionRequest) *testkube.TestSuiteExecutionRequest {
+	if specExecutionRequest == nil {
+		return nil
+	}
+
+	return &testkube.TestSuiteExecutionRequest{
+		Name:            specExecutionRequest.Name,
+		Labels:          specExecutionRequest.Labels,
+		ExecutionLabels: specExecutionRequest.ExecutionLabels,
+		Namespace:       specExecutionRequest.Namespace,
+		Variables:       MergeVariablesAndParams(specExecutionRequest.Variables, nil),
+		SecretUUID:      specExecutionRequest.SecretUUID,
+		Sync:            specExecutionRequest.Sync,
+		HttpProxy:       specExecutionRequest.HttpProxy,
+		HttpsProxy:      specExecutionRequest.HttpsProxy,
+		Timeout:         specExecutionRequest.Timeout,
+	}
+}
+
+// MapStatusFromSpec maps CRD to OpenAPI spec TestSuiteStatus
+func MapStatusFromSpec(specStatus testsuitesv2.TestSuiteStatus) *testkube.TestSuiteStatus {
+	if specStatus.LatestExecution == nil {
+		return nil
+	}
+
+	return &testkube.TestSuiteStatus{
+		LatestExecution: &testkube.TestSuiteExecutionCore{
+			Id:        specStatus.LatestExecution.Id,
+			Status:    (*testkube.TestSuiteExecutionStatus)(specStatus.LatestExecution.Status),
+			StartTime: specStatus.LatestExecution.StartTime.Time,
+			EndTime:   specStatus.LatestExecution.EndTime.Time,
+		},
+	}
 }

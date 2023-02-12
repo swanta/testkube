@@ -1,22 +1,22 @@
 package executors
 
 import (
-	"fmt"
-	"io/ioutil"
 	"strconv"
+
+	"github.com/spf13/cobra"
 
 	"github.com/kubeshop/testkube/cmd/kubectl-testkube/commands/common"
 	apiClient "github.com/kubeshop/testkube/pkg/api/v1/client"
+	"github.com/kubeshop/testkube/pkg/api/v1/testkube"
 	"github.com/kubeshop/testkube/pkg/crd"
 	"github.com/kubeshop/testkube/pkg/ui"
-	"github.com/spf13/cobra"
 )
 
 func NewCreateExecutorCmd() *cobra.Command {
 	var (
-		types                                       []string
-		name, executorType, image, uri, jobTemplate string
-		labels                                      map[string]string
+		types, command, executorArgs, imagePullSecretNames, features, contentTypes []string
+		name, executorType, image, uri, jobTemplate, iconURI, docsURI              string
+		labels, tooltips                                                           map[string]string
 	)
 
 	cmd := &cobra.Command{
@@ -43,23 +43,8 @@ func NewCreateExecutorCmd() *cobra.Command {
 				}
 			}
 
-			jobTemplateContent := ""
-			if jobTemplate != "" {
-				b, err := ioutil.ReadFile(jobTemplate)
-				ui.ExitOnError("reading job template", err)
-				jobTemplateContent = string(b)
-			}
-
-			options := apiClient.CreateExecutorOptions{
-				Name:         name,
-				Namespace:    namespace,
-				Types:        types,
-				ExecutorType: executorType,
-				Image:        image,
-				Uri:          uri,
-				JobTemplate:  jobTemplateContent,
-				Labels:       labels,
-			}
+			options, err := NewUpsertExecutorOptionsFromFlags(cmd)
+			ui.ExitOnError("getting executor options", err)
 
 			if !crdOnly {
 				_, err = client.CreateExecutor(options)
@@ -67,10 +52,7 @@ func NewCreateExecutorCmd() *cobra.Command {
 
 				ui.Success("Executor created", name)
 			} else {
-				if options.JobTemplate != "" {
-					options.JobTemplate = fmt.Sprintf("%q", options.JobTemplate)
-				}
-
+				(*testkube.ExecutorUpsertRequest)(&options).QuoteExecutorTextFields()
 				data, err := crd.ExecuteTemplate(crd.TemplateExecutor, options)
 				ui.ExitOnError("executing crd template", err)
 
@@ -79,14 +61,22 @@ func NewCreateExecutorCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVarP(&name, "name", "n", "", "unique test name - mandatory")
-	cmd.Flags().StringArrayVarP(&types, "types", "t", []string{}, "types handled by executor")
-	cmd.Flags().StringVar(&executorType, "executor-type", "job", "executor type (defaults to job)")
+	cmd.Flags().StringVarP(&name, "name", "n", "", "unique executor name - mandatory")
+	cmd.Flags().StringArrayVarP(&types, "types", "t", []string{}, "test types handled by executor")
+	cmd.Flags().StringVar(&executorType, "executor-type", "job", "executor type, container or job (defaults to job)")
 
 	cmd.Flags().StringVarP(&uri, "uri", "u", "", "if resource need to be loaded from URI")
-	cmd.Flags().StringVarP(&image, "image", "i", "", "if uri is git repository we can set additional branch parameter")
-	cmd.Flags().StringVarP(&jobTemplate, "job-template", "j", "", "if executor needs to be launched using custom job specification")
+	cmd.Flags().StringVar(&image, "image", "", "image used for executor")
+	cmd.Flags().StringArrayVar(&imagePullSecretNames, "image-pull-secrets", []string{}, "secret name used to pull the image in executor")
+	cmd.Flags().StringArrayVar(&command, "command", []string{}, "command passed to image in container executor")
+	cmd.Flags().StringArrayVar(&executorArgs, "args", []string{}, "args passed to image in container executor")
+	cmd.Flags().StringVarP(&jobTemplate, "job-template", "j", "", "if executor needs to be launched using custom job specification, then a path to template file should be provided")
 	cmd.Flags().StringToStringVarP(&labels, "label", "l", nil, "label key value pair: --label key1=value1")
+	cmd.Flags().StringArrayVar(&features, "feature", []string{}, "feature provided by executor")
+	cmd.Flags().StringVarP(&iconURI, "icon-uri", "", "", "URI to executor icon")
+	cmd.Flags().StringVarP(&docsURI, "docs-uri", "", "", "URI to executor docs")
+	cmd.Flags().StringArrayVar(&contentTypes, "content-type", []string{}, "list of supported content types for executor")
+	cmd.Flags().StringToStringVarP(&tooltips, "tooltip", "", nil, "tooltip key value pair: --tooltip key1=value1")
 
 	return cmd
 }

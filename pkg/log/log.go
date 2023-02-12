@@ -2,9 +2,10 @@ package log
 
 import (
 	"log"
-	"os"
 
 	"go.uber.org/zap"
+
+	"github.com/kubeshop/testkube/pkg/envs"
 )
 
 // New returns new logger instance
@@ -12,7 +13,7 @@ func New() *zap.SugaredLogger {
 	atomicLevel := zap.NewAtomicLevel()
 
 	atomicLevel.SetLevel(zap.InfoLevel)
-	if val, exists := os.LookupEnv("DEBUG"); exists && val != "" {
+	if envs.IsTrue("DEBUG") {
 		atomicLevel.SetLevel(zap.DebugLevel)
 	}
 

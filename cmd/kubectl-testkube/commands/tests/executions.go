@@ -4,11 +4,12 @@ import (
 	"os"
 	"strings"
 
+	"github.com/spf13/cobra"
+
 	"github.com/kubeshop/testkube/cmd/kubectl-testkube/commands/common"
 	"github.com/kubeshop/testkube/cmd/kubectl-testkube/commands/common/render"
 	"github.com/kubeshop/testkube/cmd/kubectl-testkube/commands/tests/renderer"
 	"github.com/kubeshop/testkube/pkg/ui"
-	"github.com/spf13/cobra"
 )
 
 func NewGetExecutionCmd() *cobra.Command {
@@ -19,7 +20,7 @@ func NewGetExecutionCmd() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:     "execution [executionID]",
+		Use:     "execution [executionID][executionName]",
 		Aliases: []string{"executions", "e"},
 		Short:   "Lists or gets test executions",
 		Long:    `Getting list of execution for given test name or recent executions if there is no test name passed`,
@@ -36,7 +37,6 @@ func NewGetExecutionCmd() *cobra.Command {
 			} else {
 				executions, err := client.ListExecutions(testID, limit, strings.Join(selectors, ","))
 				ui.ExitOnError("Getting executions for test: "+testID, err)
-
 				err = render.List(cmd, executions, os.Stdout)
 				ui.ExitOnError("rendering", err)
 			}

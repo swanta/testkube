@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/gofiber/fiber/v2"
+
 	"github.com/kubeshop/testkube/pkg/api/v1/testkube"
 	"github.com/kubeshop/testkube/pkg/crd"
 	webhooksmapper "github.com/kubeshop/testkube/pkg/mapper/webhooks"
@@ -18,13 +19,8 @@ func (s TestkubeAPI) CreateWebhookHandler() fiber.Handler {
 		}
 
 		if c.Accepts(mediaTypeJSON, mediaTypeYAML) == mediaTypeYAML {
-			data, err := crd.ExecuteTemplate(crd.TemplateWebhook, request)
-			if err != nil {
-				return s.Error(c, http.StatusBadRequest, err)
-			}
-
-			c.Context().SetContentType(mediaTypeYAML)
-			return c.SendString(data)
+			data, err := crd.GenerateYAML(crd.TemplateWebhook, []testkube.WebhookCreateRequest{request})
+			return s.getCRDs(c, data, err)
 		}
 
 		webhook := webhooksmapper.MapAPIToCRD(request)
@@ -35,7 +31,7 @@ func (s TestkubeAPI) CreateWebhookHandler() fiber.Handler {
 			return s.Error(c, http.StatusBadRequest, err)
 		}
 
-		c.Status(201)
+		c.Status(http.StatusCreated)
 		return c.JSON(created)
 	}
 }
@@ -52,6 +48,12 @@ func (s TestkubeAPI) ListWebhooksHandler() fiber.Handler {
 			results = append(results, webhooksmapper.MapCRDToAPI(item))
 
 		}
+
+		if c.Accepts(mediaTypeJSON, mediaTypeYAML) == mediaTypeYAML {
+			data, err := crd.GenerateYAML(crd.TemplateWebhook, results)
+			return s.getCRDs(c, data, err)
+		}
+
 		return c.JSON(results)
 	}
 }
@@ -64,7 +66,12 @@ func (s TestkubeAPI) GetWebhookHandler() fiber.Handler {
 		if err != nil {
 			return s.Error(c, http.StatusBadRequest, err)
 		}
+
 		result := webhooksmapper.MapCRDToAPI(*item)
+		if c.Accepts(mediaTypeJSON, mediaTypeYAML) == mediaTypeYAML {
+			data, err := crd.GenerateYAML(crd.TemplateWebhook, []testkube.Webhook{result})
+			return s.getCRDs(c, data, err)
+		}
 
 		return c.JSON(result)
 	}
@@ -79,7 +86,7 @@ func (s TestkubeAPI) DeleteWebhookHandler() fiber.Handler {
 			return s.Error(c, http.StatusBadRequest, err)
 		}
 
-		c.Status(204)
+		c.Status(http.StatusNoContent)
 		return nil
 	}
 }

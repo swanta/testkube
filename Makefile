@@ -4,16 +4,20 @@ CHART_NAME=api-server
 BIN_DIR ?= $(HOME)/bin
 USER ?= $(USER)
 NAMESPACE ?= "testkube"
-DATE ?= $(shell date -u --iso-8601=seconds)
+DATE ?= $(shell date '+%s')
 COMMIT ?= $(shell git log -1 --pretty=format:"%h")
 VERSION ?= 999.0.0-$(shell git log -1 --pretty=format:"%h")
-ANALYTICS_TRACKING_ID ?= $(DEBUG)
-ANALYTICS_TRACKING_ID ?= $(ANALYTICS_TRACKING_ID)
-ANALYTICS_API_KEY ?= $(ANALYTICS_API_KEY)"
-LD_FLAGS += -X github.com/kubeshop/testkube/pkg/slacknotifier.SlackBotClientID=$(SLACK_BOT_CLIENT_ID) 
-LD_FLAGS += -X github.com/kubeshop/testkube/pkg/slacknotifier.SlackBotClientSecret=$(SLACK_BOT_CLIENT_SECRET)
-LD_FLAGS += -X github.com/kubeshop/testkube/pkg/analytics.TestkubeMeasurementID=$(ANALYTICS_TRACKING_ID)
-LD_FLAGS += -X github.com/kubeshop/testkube/pkg/analytics.TestkubeMeasurementSecret=$(ANALYTICS_API_KEY)
+DEBUG ?= ${DEBUG:-0}
+DASHBOARD_URI ?= ${DASHBOARD_URI:-"https://demo.testkube.io"}
+ANALYTICS_TRACKING_ID = ${ANALYTICS_TRACKING_ID:-""}
+ANALYTICS_API_KEY = ${ANALYTICS_API_KEY:-""}
+PROTOC := ${BIN_DIR}/protoc/bin/protoc
+PROTOC_GEN_GO := ${BIN_DIR}/protoc-gen-go
+PROTOC_GEN_GO_GRPC := ${BIN_DIR}/protoc-gen-go-grpc
+LD_FLAGS += -X github.com/kubeshop/testkube/internal/app/api/v1.SlackBotClientID=$(SLACK_BOT_CLIENT_ID) 
+LD_FLAGS += -X github.com/kubeshop/testkube/internal/app/api/v1.SlackBotClientSecret=$(SLACK_BOT_CLIENT_SECRET)
+LD_FLAGS += -X github.com/kubeshop/testkube/pkg/telemetry.TestkubeMeasurementID=$(ANALYTICS_TRACKING_ID)
+LD_FLAGS += -X github.com/kubeshop/testkube/pkg/telemetry.TestkubeMeasurementSecret=$(ANALYTICS_API_KEY)
 LD_FLAGS += -X github.com/kubeshop/testkube/internal/pkg/api.Version=$(VERSION) 
 LD_FLAGS += -X github.com/kubeshop/testkube/internal/pkg/api.Commit=$(COMMIT)
 
@@ -26,13 +30,13 @@ use-env-file:
 	$(call setup_env)
 
 run-api: use-env-file
-	TESTKUBE_NAMESPACE=$(NAMESPACE) SCRAPPERENABLED=true STORAGE_SSL=true DEBUG=$(DEBUG) APISERVER_PORT=8088 go run  -ldflags='$(LD_FLAGS)' cmd/api-server/main.go 
+	TESTKUBE_DASHBOARD_URI=$(DASHBOARD_URI) APISERVER_CONFIG=testkube-api-server-config-testkube TESTKUBE_ANALYTICS_ENABLED=$(TESTKUBE_ANALYTICS_ENABLED) TESTKUBE_NAMESPACE=$(NAMESPACE) SCRAPPERENABLED=true STORAGE_SSL=true DEBUG=$(DEBUG) APISERVER_PORT=8088 go run  -ldflags='$(LD_FLAGS)' cmd/api-server/main.go 
 
 run-api-race-detector: use-env-file
-	TESTKUBE_NAMESPACE=$(NAMESPACE) DEBUG=1 APISERVER_PORT=8088 go run -race -ldflags='$(LD_FLAGS)'  cmd/api-server/main.go
+	TESTKUBE_DASHBOARD_URI=$(DASHBOARD_URI) APISERVER_CONFIG=testkube-api-server-config-testkube TESTKUBE_NAMESPACE=$(NAMESPACE) DEBUG=1 APISERVER_PORT=8088 go run -race -ldflags='$(LD_FLAGS)'  cmd/api-server/main.go
 
 run-api-telepresence: use-env-file
-	TESTKUBE_NAMESPACE=$(NAMESPACE) DEBUG=1 API_MONGO_DSN=mongodb://testkube-mongodb:27017 APISERVER_PORT=8088 go run cmd/api-server/main.go
+	TESTKUBE_DASHBOARD_URI=$(DASHBOARD_URI) APISERVER_CONFIG=testkube-api-server-config-testkube TESTKUBE_NAMESPACE=$(NAMESPACE) DEBUG=1 API_MONGO_DSN=mongodb://testkube-mongodb:27017 APISERVER_PORT=8088 go run cmd/api-server/main.go
 
 run-mongo-dev: 
 	docker run --name mongodb -p 27017:27017 --rm mongo
@@ -49,10 +53,10 @@ build-testkube-bin:
 			-X main.commit=$(COMMIT) \
 			-X main.date=$(DATE) \
 			-X main.builtBy=$(USER) \
-			-X github.com/kubeshop/testkube/pkg/analytics.TestkubeMeasurementID=$(ANALYTICS_TRACKING_ID)  \
-			-X github.com/kubeshop/testkube/pkg/analytics.TestkubeMeasurementSecret=$(ANALYTICS_API_KEY) \
-			-X github.com/kubeshop/testkube/pkg/slacknotifier.SlackBotClientID=$(SLACK_BOT_CLIENT_ID) \
-			-X github.com/kubeshop/testkube/pkg/slacknotifier.SlackBotClientSecret=$(SLACK_BOT_CLIENT_SECRET)" \
+			-X github.com/kubeshop/testkube/internal/app/api/v1.SlackBotClientID=$(SLACK_BOT_CLIENT_ID) \
+			-X github.com/kubeshop/testkube/internal/app/api/v1.SlackBotClientSecret=$(SLACK_BOT_CLIENT_SECRET) \
+			-X github.com/kubeshop/testkube/pkg/telemetry.TestkubeMeasurementID=$(ANALYTICS_TRACKING_ID)  \
+			-X github.com/kubeshop/testkube/pkg/telemetry.TestkubeMeasurementSecret=$(ANALYTICS_API_KEY)" \
 		-o "$(BIN_DIR)/kubectl-testkube" \
 		cmd/kubectl-testkube/main.go
 
@@ -63,15 +67,15 @@ build-testkube-bin-intel:
 			-X main.commit=$(COMMIT) \
 			-X main.date=$(DATE) \
 			-X main.builtBy=$(USER) \
-			-X github.com/kubeshop/testkube/pkg/analytics.TestkubeMeasurementID=$(ANALYTICS_TRACKING_ID)  \
-			-X github.com/kubeshop/testkube/pkg/analytics.TestkubeMeasurementSecret=$(ANALYTICS_API_KEY) \
-			-X github.com/kubeshop/testkube/pkg/slacknotifier.SlackBotClientID=$(SLACK_BOT_CLIENT_ID) \
-			-X github.com/kubeshop/testkube/pkg/slacknotifier.SlackBotClientSecret=$(SLACK_BOT_CLIENT_SECRET)" \
+			-X github.com/kubeshop/testkube/internal/app/api/v1.SlackBotClientID=$(SLACK_BOT_CLIENT_ID) \
+			-X github.com/kubeshop/testkube/internal/app/api/v1.SlackBotClientSecret=$(SLACK_BOT_CLIENT_SECRET) \
+			-X github.com/kubeshop/testkube/pkg/telemetry.TestkubeMeasurementID=$(ANALYTICS_TRACKING_ID)  \
+			-X github.com/kubeshop/testkube/pkg/telemetry.TestkubeMeasurementSecret=$(ANALYTICS_API_KEY)" \
 		-o "$(BIN_DIR)/kubectl-testkube" \
 		cmd/kubectl-testkube/main.go
 
 docker-build-api:
-	docker build -t api-server -f build/api-server/Dockerfile .
+	docker build  --platform linux/x86_64 -t kubeshop/testkube-api-server:$(COMMIT)-dev -f build/api-server/Dockerfile .
 
 dev-install-local-executors:
 	kubectl apply --namespace testkube -f https://raw.githubusercontent.com/kubeshop/testkube-operator/main/config/samples/executor_v1_executor.yaml
@@ -89,8 +93,37 @@ openapi-generate-model-testkube:
 	rm -rf tmp
 	find ./pkg/api/v1/testkube -type f -exec sed -i '' -e "s/package swagger/package testkube/g" {} \;
 	find ./pkg/api/v1/testkube -type f -exec sed -i '' -e "s/\*map\[string\]/map[string]/g" {} \;
+	find ./pkg/api/v1/testkube -name "*update*.go" -type f -exec sed -i '' -e "s/ map/ \*map/g" {} \;
+	find ./pkg/api/v1/testkube -name "*update*.go" -type f -exec sed -i '' -e "s/ string/ \*string/g" {} \;
+	find ./pkg/api/v1/testkube -name "*update*.go" -type f -exec sed -i '' -e "s/ \[\]/ \*\[\]/g" {} \;
+	find ./pkg/api/v1/testkube -name "*update*.go" -type f -exec sed -i '' -e "s/ \*TestContent/ \*\*TestContentUpdate/g" {} \;
+	find ./pkg/api/v1/testkube -name "*update*.go" -type f -exec sed -i '' -e "s/ \*ExecutionRequest/ \*\*ExecutionUpdateRequest/g" {} \;
+	find ./pkg/api/v1/testkube -name "*update*.go" -type f -exec sed -i '' -e "s/ \*Repository/ \*\*RepositoryUpdate/g" {} \;
+	find ./pkg/api/v1/testkube -name "*update*.go" -type f -exec sed -i '' -e "s/ \*SecretRef/ \*\*SecretRef/g" {} \;
+	find ./pkg/api/v1/testkube -name "*update*.go" -type f -exec sed -i '' -e "s/ int32/ \*int32/g" {} \;
+	find ./pkg/api/v1/testkube -name "*update*.go" -type f -exec sed -i '' -e "s/ int64/ \*int64/g" {} \;
+	find ./pkg/api/v1/testkube -name "*update*.go" -type f -exec sed -i '' -e "s/ bool/ \*bool/g" {} \;
+	find ./pkg/api/v1/testkube -name "*update*.go" -type f -exec sed -i '' -e "s/ \*ArtifactRequest/ \*\*ArtifactUpdateRequest/g" {} \;
+	find ./pkg/api/v1/testkube -name "*update*.go" -type f -exec sed -i '' -e "s/ \*TestSuiteExecutionRequest/ \*\*TestSuiteExecutionUpdateRequest/g" {} \;
+	find ./pkg/api/v1/testkube -name "*update*.go" -type f -exec sed -i '' -e "s/ \*ExecutorMeta/ \*\*ExecutorMetaUpdate/g" {} \;	
 	go fmt pkg/api/v1/testkube/*.go
-	
+
+protobuf-generate:
+	$(PROTOC) \
+    --go_out=. --go-grpc_out=. proto/service.proto
+
+install-protobuf: $(PROTOC) $(PROTOC_GEN_GO) $(PROTOC_GEN_GO_GRPC)
+# Protoc and friends installation and generation
+$(PROTOC):
+	$(call install-protoc)
+
+$(PROTOC_GEN_GO):
+	@echo "[INFO]: Installing protobuf go generation plugin."
+	GOBIN=${BIN_DIR} go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.28
+
+$(PROTOC_GEN_GO_GRPC):
+	@echo "[INFO]: Installing protobuf GRPC go generation plugin."
+	GOBIN=${BIN_DIR} go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.2
 
 test: 
 	go test ./... -cover -failfast
@@ -196,3 +229,20 @@ port-forward-api:
 
 run-proxy: 
 	go run cmd/proxy/main.go --namespace $(NAMESPACE)
+
+define install-protoc
+@[ -f "${PROTOC}" ] || { \
+set -e ;\
+echo "[INFO] Installing protoc compiler to ${BIN_DIR}/protoc" ;\
+mkdir -pv "${BIN_DIR}/" ;\
+TMP_DIR=$$(mktemp -d) ;\
+cd $$TMP_DIR ;\
+PB_REL="https://github.com/protocolbuffers/protobuf/releases" ;\
+VERSION=3.19.4 ;\
+if [ "$$(uname)" == "Darwin" ];then FILENAME=protoc-$${VERSION}-osx-x86_64.zip ;fi ;\
+if [ "$$(uname)" == "Linux" ];then FILENAME=protoc-$${VERSION}-linux-x86_64.zip;fi ;\
+echo "Downloading $${FILENAME} to $${TMP_DIR}" ;\
+curl -LO $${PB_REL}/download/v$${VERSION}/$${FILENAME} ; unzip $${FILENAME} -d ${BIN_DIR}/protoc ; \
+rm -rf $${TMP_DIR} ;\
+}
+endef

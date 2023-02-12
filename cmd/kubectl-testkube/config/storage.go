@@ -2,7 +2,6 @@ package config
 
 import (
 	"encoding/json"
-	"io/ioutil"
 	"os"
 	"path"
 
@@ -10,8 +9,9 @@ import (
 )
 
 var DefaultConfig = Data{
-	AnalyticsEnabled: true,
+	TelemetryEnabled: true,
 	Namespace:        "testkube",
+	APIURI:           "http://localhost:8088",
 	OAuth2Data: OAuth2Data{
 		Provider: oauth.GithubProviderType,
 	},
@@ -19,6 +19,12 @@ var DefaultConfig = Data{
 
 const configDirName = ".testkube"
 const configFile = "config.json"
+
+func GetStorage(dir string) (Storage, error) {
+	storage := Storage{Dir: dir}
+	err := storage.Init()
+	return storage, err
+}
 
 type Storage struct {
 	Dir string
@@ -29,7 +35,7 @@ func (c *Storage) Load() (data Data, err error) {
 	if err != nil {
 		return data, err
 	}
-	d, err := ioutil.ReadFile(path)
+	d, err := os.ReadFile(path)
 	if err != nil {
 		return data, err
 	}
@@ -46,7 +52,7 @@ func (c *Storage) Save(data Data) error {
 	if err != nil {
 		return err
 	}
-	return ioutil.WriteFile(path, d, 0700)
+	return os.WriteFile(path, d, 0700)
 }
 
 func (c *Storage) Init() error {

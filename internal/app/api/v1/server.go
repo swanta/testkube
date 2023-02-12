@@ -1,96 +1,115 @@
 package v1
 
 import (
+	"context"
 	"encoding/base64"
-	"encoding/json"
 	"os"
 	"strconv"
+	"time"
+
+	"github.com/kubeshop/testkube/pkg/version"
+
+	"github.com/kubeshop/testkube/pkg/datefilter"
+	"github.com/kubeshop/testkube/pkg/repository/result"
+	"github.com/kubeshop/testkube/pkg/repository/testresult"
+
+	"k8s.io/client-go/kubernetes"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
+	"github.com/gofiber/fiber/v2/middleware/proxy"
 	"github.com/kelseyhightower/envconfig"
-	"k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	executorv1 "github.com/kubeshop/testkube-operator/apis/executor/v1"
 	executorsclientv1 "github.com/kubeshop/testkube-operator/client/executors/v1"
-	testsclientv2 "github.com/kubeshop/testkube-operator/client/tests/v2"
-	testsuitesclientv1 "github.com/kubeshop/testkube-operator/client/testsuites/v1"
-	"github.com/kubeshop/testkube/internal/pkg/api/datefilter"
-	"github.com/kubeshop/testkube/internal/pkg/api/repository/result"
-	"github.com/kubeshop/testkube/internal/pkg/api/repository/testresult"
+	testsclientv3 "github.com/kubeshop/testkube-operator/client/tests/v3"
+	testsourcesclientv1 "github.com/kubeshop/testkube-operator/client/testsources/v1"
+	testsuitesclientv2 "github.com/kubeshop/testkube-operator/client/testsuites/v2"
+	testkubeclientset "github.com/kubeshop/testkube-operator/pkg/clientset/versioned"
+	"github.com/kubeshop/testkube/internal/app/api/metrics"
 	"github.com/kubeshop/testkube/pkg/api/v1/testkube"
-	"github.com/kubeshop/testkube/pkg/cronjob"
+	"github.com/kubeshop/testkube/pkg/config"
+	"github.com/kubeshop/testkube/pkg/event"
+	"github.com/kubeshop/testkube/pkg/event/kind/slack"
+	"github.com/kubeshop/testkube/pkg/event/kind/webhook"
+	ws "github.com/kubeshop/testkube/pkg/event/kind/websocket"
+	kubeexecutor "github.com/kubeshop/testkube/pkg/executor"
 	"github.com/kubeshop/testkube/pkg/executor/client"
 	"github.com/kubeshop/testkube/pkg/oauth"
+	"github.com/kubeshop/testkube/pkg/scheduler"
 	"github.com/kubeshop/testkube/pkg/secret"
 	"github.com/kubeshop/testkube/pkg/server"
 	"github.com/kubeshop/testkube/pkg/storage"
 	"github.com/kubeshop/testkube/pkg/storage/minio"
-	"github.com/kubeshop/testkube/pkg/webhook"
+	"github.com/kubeshop/testkube/pkg/telemetry"
+	"github.com/kubeshop/testkube/pkg/utils/text"
 )
+
+const HeartbeatInterval = time.Hour
 
 func NewTestkubeAPI(
 	namespace string,
-	executionsResults result.Repository,
-	testExecutionsResults testresult.Repository,
-	testsClient *testsclientv2.TestsClient,
+	testExecutionResults result.Repository,
+	testsuiteExecutionsResults testresult.Repository,
+	testsClient *testsclientv3.TestsClient,
 	executorsClient *executorsclientv1.ExecutorsClient,
-	testsuitesClient *testsuitesclientv1.TestSuitesClient,
+	testsuitesClient *testsuitesclientv2.TestSuitesClient,
 	secretClient *secret.Client,
 	webhookClient *executorsclientv1.WebhooksClient,
+	clientset kubernetes.Interface,
+	testkubeClientset testkubeclientset.Interface,
+	testsourcesClient *testsourcesclientv1.TestSourcesClient,
+	configMap config.Repository,
 	clusterId string,
+	eventsEmitter *event.Emitter,
+	executor client.Executor,
+	containerExecutor client.Executor,
+	metrics metrics.Metrics,
+	templates kubeexecutor.Templates,
+	scheduler *scheduler.Scheduler,
 ) TestkubeAPI {
 
 	var httpConfig server.Config
 	err := envconfig.Process("APISERVER", &httpConfig)
-	// Do we want to panic here or just ignore the err
+	// Do we want to panic here or just ignore the error
 	if err != nil {
 		panic(err)
 	}
 
-	// you can disable analytics tracking for API server
-	analyticsEnabledStr := os.Getenv("TESTKUBE_ANALYTICS_ENABLED")
-	analyticsEnabled, err := strconv.ParseBool(analyticsEnabledStr)
-	if err != nil {
-		analyticsEnabled = true
-	}
+	httpConfig.ClusterID = clusterId
 
 	s := TestkubeAPI{
 		HTTPServer:           server.NewServer(httpConfig),
-		TestExecutionResults: testExecutionsResults,
-		ExecutionResults:     executionsResults,
+		TestExecutionResults: testsuiteExecutionsResults,
+		ExecutionResults:     testExecutionResults,
 		TestsClient:          testsClient,
 		ExecutorsClient:      executorsClient,
 		SecretClient:         secretClient,
+		Clientset:            clientset,
 		TestsSuitesClient:    testsuitesClient,
-		Metrics:              NewMetrics(),
-		EventsEmitter:        webhook.NewEmitter(),
+		TestKubeClientset:    testkubeClientset,
+		Metrics:              metrics,
+		Events:               eventsEmitter,
 		WebhooksClient:       webhookClient,
+		TestSourcesClient:    testsourcesClient,
 		Namespace:            namespace,
-		AnalyticsEnabled:     analyticsEnabled,
-		ClusterID:            clusterId,
+		ConfigMap:            configMap,
+		Executor:             executor,
+		ContainerExecutor:    containerExecutor,
+		templates:            templates,
+		scheduler:            scheduler,
 	}
 
-	initImage, err := s.loadDefaultExecutors(s.Namespace, os.Getenv("TESTKUBE_DEFAULT_EXECUTORS"))
-	if err != nil {
-		s.Log.Warnf("load default executors %w", err)
-	}
+	// will be reused in websockets handler
+	s.WebsocketLoader = ws.NewWebsocketLoader()
 
-	if err = s.jobTemplates.decodeFromEnv(); err != nil {
-		panic(err)
-	}
+	s.Events.Loader.Register(webhook.NewWebhookLoader(webhookClient))
+	s.Events.Loader.Register(s.WebsocketLoader)
+	s.Events.Loader.Register(s.getSlackLoader())
 
-	if s.Executor, err = client.NewJobExecutor(executionsResults, s.Namespace, initImage, s.jobTemplates.Job, s.Metrics); err != nil {
-		panic(err)
-	}
+	s.InitEnvs()
+	s.InitStorage()
+	s.InitRoutes()
 
-	s.CronJobClient, err = cronjob.NewClient(httpConfig.Fullname, httpConfig.Port, s.jobTemplates.Cronjob, s.Namespace)
-	if err != nil {
-		panic(err)
-	}
-
-	s.Init()
 	return s
 }
 
@@ -99,46 +118,25 @@ type TestkubeAPI struct {
 	ExecutionResults     result.Repository
 	TestExecutionResults testresult.Repository
 	Executor             client.Executor
-	TestsSuitesClient    *testsuitesclientv1.TestSuitesClient
-	TestsClient          *testsclientv2.TestsClient
+	ContainerExecutor    client.Executor
+	TestsSuitesClient    *testsuitesclientv2.TestSuitesClient
+	TestsClient          *testsclientv3.TestsClient
 	ExecutorsClient      *executorsclientv1.ExecutorsClient
 	SecretClient         *secret.Client
 	WebhooksClient       *executorsclientv1.WebhooksClient
-	EventsEmitter        *webhook.Emitter
-	CronJobClient        *cronjob.Client
-	Metrics              Metrics
+	TestKubeClientset    testkubeclientset.Interface
+	TestSourcesClient    *testsourcesclientv1.TestSourcesClient
+	Metrics              metrics.Metrics
 	Storage              storage.Client
 	storageParams        storageParams
-	jobTemplates         jobTemplates
 	Namespace            string
-	AnalyticsEnabled     bool
-	ClusterID            string
 	oauthParams          oauthParams
-}
-
-type jobTemplates struct {
-	Job     string
-	Cronjob string
-}
-
-func (j *jobTemplates) decodeFromEnv() error {
-	err := envconfig.Process("TESTKUBE_TEMPLATE", j)
-	if err != nil {
-		return err
-	}
-	templates := []*string{&j.Job, &j.Cronjob}
-	for i := range templates {
-		if *templates[i] != "" {
-			dataDecoded, err := base64.StdEncoding.DecodeString(*templates[i])
-			if err != nil {
-				return err
-			}
-
-			*templates[i] = string(dataDecoded)
-		}
-	}
-
-	return nil
+	WebsocketLoader      *ws.WebsocketLoader
+	Events               *event.Emitter
+	ConfigMap            config.Repository
+	templates            kubeexecutor.Templates
+	scheduler            *scheduler.Scheduler
+	Clientset            kubernetes.Interface
 }
 
 type storageParams struct {
@@ -148,6 +146,7 @@ type storageParams struct {
 	SecretAccessKey string
 	Location        string
 	Token           string
+	Bucket          string
 }
 
 type oauthParams struct {
@@ -157,8 +156,27 @@ type oauthParams struct {
 	Scopes       string
 }
 
+// SendTelemetryStartEvent sends anonymous start event to telemetry trackers
+func (s TestkubeAPI) SendTelemetryStartEvent(ctx context.Context) {
+	telemetryEnabled, err := s.ConfigMap.GetTelemetryEnabled(ctx)
+	if err != nil {
+		s.Log.Errorw("error getting config map", "error", err)
+	}
+
+	if !telemetryEnabled {
+		return
+	}
+
+	out, err := telemetry.SendServerStartEvent(s.Config.ClusterID, version.Version)
+	if err != nil {
+		s.Log.Debug("telemetry send error", "error", err.Error())
+	} else {
+		s.Log.Debugw("sending telemetry server start event", "output", out)
+	}
+}
+
 // Init initializes api server settings
-func (s TestkubeAPI) Init() {
+func (s *TestkubeAPI) InitEnvs() {
 	if err := envconfig.Process("STORAGE", &s.storageParams); err != nil {
 		s.Log.Infow("Processing STORAGE environment config", err)
 	}
@@ -166,26 +184,33 @@ func (s TestkubeAPI) Init() {
 	if err := envconfig.Process("TESTKUBE_OAUTH", &s.oauthParams); err != nil {
 		s.Log.Infow("Processing TESTKUBE_OAUTH environment config", err)
 	}
+}
 
-	s.Storage = minio.NewClient(s.storageParams.Endpoint, s.storageParams.AccessKeyId, s.storageParams.SecretAccessKey, s.storageParams.Location, s.storageParams.Token, s.storageParams.SSL)
+func (s *TestkubeAPI) InitStorage() {
+	s.Storage = minio.NewClient(s.storageParams.Endpoint,
+		s.storageParams.AccessKeyId,
+		s.storageParams.SecretAccessKey,
+		s.storageParams.Location,
+		s.storageParams.Token,
+		s.storageParams.Bucket,
+		s.storageParams.SSL)
+}
 
+func (s *TestkubeAPI) InitRoutes() {
 	s.Routes.Static("/api-docs", "./api/v1")
 	s.Routes.Use(cors.New())
 	s.Routes.Use(s.AuthHandler())
 
-	if s.AnalyticsEnabled {
-		// global analytics tracking send async
-		s.Routes.Use(s.AnalyticsHandler())
-	}
-
 	s.Routes.Get("/info", s.InfoHandler())
 	s.Routes.Get("/routes", s.RoutesHandler())
+	s.Routes.Get("/debug", s.DebugHandler())
 
 	executors := s.Routes.Group("/executors")
 
 	executors.Post("/", s.CreateExecutorHandler())
 	executors.Get("/", s.ListExecutorsHandler())
 	executors.Get("/:name", s.GetExecutorHandler())
+	executors.Patch("/:name", s.UpdateExecutorHandler())
 	executors.Delete("/:name", s.DeleteExecutorHandler())
 	executors.Delete("/", s.DeleteExecutorsHandler())
 
@@ -204,6 +229,7 @@ func (s TestkubeAPI) Init() {
 	executions.Get("/:executionID", s.GetExecutionHandler())
 	executions.Get("/:executionID/artifacts", s.ListArtifactsHandler())
 	executions.Get("/:executionID/logs", s.ExecutionLogsHandler())
+	executions.Get("/:executionID/logs/stream", s.ExecutionLogsStreamHandler())
 	executions.Get("/:executionID/artifacts/:filename", s.GetArtifactHandler())
 
 	tests := s.Routes.Group("/tests")
@@ -216,11 +242,13 @@ func (s TestkubeAPI) Init() {
 	tests.Get("/:id", s.GetTestHandler())
 	tests.Delete("/:id", s.DeleteTestHandler())
 
+	tests.Get("/:id/metrics", s.TestMetricsHandler())
+
 	tests.Post("/:id/executions", s.ExecuteTestsHandler())
 
 	tests.Get("/:id/executions", s.ListExecutionsHandler())
 	tests.Get("/:id/executions/:executionID", s.GetExecutionHandler())
-	tests.Delete("/:id/executions/:executionID", s.AbortExecutionHandler())
+	tests.Patch("/:id/executions/:executionID", s.AbortExecutionHandler())
 
 	testWithExecutions := s.Routes.Group("/test-with-executions")
 	testWithExecutions.Get("/", s.ListTestWithExecutionsHandler())
@@ -238,15 +266,44 @@ func (s TestkubeAPI) Init() {
 	testsuites.Post("/:id/executions", s.ExecuteTestSuitesHandler())
 	testsuites.Get("/:id/executions", s.ListTestSuiteExecutionsHandler())
 	testsuites.Get("/:id/executions/:executionID", s.GetTestSuiteExecutionHandler())
+	testsuites.Get("/:id/executions/:executionID/artifacts", s.ListTestSuiteArtifactsHandler())
+	testsuites.Patch("/:id/executions/:executionID", s.AbortTestSuiteExecutionHandler())
 
-	testExecutions := s.Routes.Group("/test-suite-executions")
-	testExecutions.Get("/", s.ListTestSuiteExecutionsHandler())
-	testExecutions.Post("/", s.ExecuteTestSuitesHandler())
-	testExecutions.Get("/:executionID", s.GetTestSuiteExecutionHandler())
+	testsuites.Get("/:id/tests", s.ListTestSuiteTestsHandler())
+
+	testsuites.Get("/:id/metrics", s.TestSuiteMetricsHandler())
+
+	testSuiteExecutions := s.Routes.Group("/test-suite-executions")
+	testSuiteExecutions.Get("/", s.ListTestSuiteExecutionsHandler())
+	testSuiteExecutions.Post("/", s.ExecuteTestSuitesHandler())
+	testSuiteExecutions.Get("/:executionID", s.GetTestSuiteExecutionHandler())
+	testSuiteExecutions.Get("/:executionID/artifacts", s.ListTestSuiteArtifactsHandler())
+	testSuiteExecutions.Patch("/:executionID", s.AbortTestSuiteExecutionHandler())
 
 	testSuiteWithExecutions := s.Routes.Group("/test-suite-with-executions")
 	testSuiteWithExecutions.Get("/", s.ListTestSuiteWithExecutionsHandler())
 	testSuiteWithExecutions.Get("/:id", s.GetTestSuiteWithExecutionHandler())
+
+	testTriggers := s.Routes.Group("/triggers")
+	testTriggers.Get("/", s.ListTestTriggersHandler())
+	testTriggers.Post("/", s.CreateTestTriggerHandler())
+	testTriggers.Patch("/", s.BulkUpdateTestTriggersHandler())
+	testTriggers.Delete("/", s.DeleteTestTriggersHandler())
+	testTriggers.Get("/:id", s.GetTestTriggerHandler())
+	testTriggers.Patch("/:id", s.UpdateTestTriggerHandler())
+	testTriggers.Delete("/:id", s.DeleteTestTriggerHandler())
+
+	keymap := s.Routes.Group("/keymap")
+	keymap.Get("/triggers", s.GetTestTriggerKeyMapHandler())
+
+	testsources := s.Routes.Group("/test-sources")
+	testsources.Post("/", s.CreateTestSourceHandler())
+	testsources.Get("/", s.ListTestSourcesHandler())
+	testsources.Patch("/", s.ProcessTestSourceBatchHandler())
+	testsources.Get("/:name", s.GetTestSourceHandler())
+	testsources.Patch("/:name", s.UpdateTestSourceHandler())
+	testsources.Delete("/:name", s.DeleteTestSourceHandler())
+	testsources.Delete("/", s.DeleteTestSourcesHandler())
 
 	labels := s.Routes.Group("/labels")
 	labels.Get("/", s.ListLabelsHandler())
@@ -254,14 +311,63 @@ func (s TestkubeAPI) Init() {
 	slack := s.Routes.Group("/slack")
 	slack.Get("/", s.OauthHandler())
 
-	s.EventsEmitter.RunWorkers()
-	s.HandleEmitterLogs()
+	events := s.Routes.Group("/events")
+	events.Post("/flux", s.FluxEventHandler())
+	events.Get("/stream", s.EventsStreamHandler())
+
+	configs := s.Routes.Group("/config")
+	configs.Get("/", s.GetConfigsHandler())
+	configs.Patch("/", s.UpdateConfigsHandler())
+
+	debug := s.Routes.Group("/debug")
+	debug.Get("/listeners", s.GetDebugListenersHandler())
+
+	files := s.Routes.Group("/uploads")
+	files.Post("/", s.UploadFiles())
+
+	repositories := s.Routes.Group("/repositories")
+	repositories.Post("/", s.ValidateRepositoryHandler())
 
 	// mount everything on results
 	// TODO it should be named /api/ + dashboard refactor
 	s.Mux.Mount("/results", s.Mux)
 
-	s.Log.Infow("Testkube API configured", "namespace", s.Namespace, "clusterId", s.ClusterID)
+	// mount dashboard on /ui
+	dashboardURI := os.Getenv("TESTKUBE_DASHBOARD_URI")
+	if dashboardURI == "" {
+		dashboardURI = "http://testkube-dashboard"
+	}
+	s.Log.Infow("dashboard uri", "uri", dashboardURI)
+	s.Mux.All("/", proxy.Forward(dashboardURI))
+
+}
+
+func (s TestkubeAPI) StartTelemetryHeartbeats(ctx context.Context) {
+
+	go func() {
+		ticker := time.NewTicker(HeartbeatInterval)
+		for {
+			telemetryEnabled, err := s.ConfigMap.GetTelemetryEnabled(ctx)
+			if err != nil {
+				s.Log.Errorw("error getting config map", "error", err)
+			}
+			if telemetryEnabled {
+				l := s.Log.With("measurmentId", telemetry.TestkubeMeasurementID, "secret", text.Obfuscate(telemetry.TestkubeMeasurementSecret))
+				host, err := os.Hostname()
+				if err != nil {
+					l.Debugw("getting hostname error", "hostname", host, "error", err)
+				}
+				out, err := telemetry.SendHeartbeatEvent(host, version.Version, s.Config.ClusterID)
+				if err != nil {
+					l.Debugw("sending heartbeat telemetry event error", "error", err)
+				} else {
+					l.Debugw("sending heartbeat telemetry event", "output", out)
+				}
+
+			}
+			<-ticker.C
+		}
+	}()
 }
 
 // TODO should we use single generic filter for all list based resources ?
@@ -306,6 +412,11 @@ func getFilterFromRequest(c *fiber.Ctx) result.Filter {
 		filter = filter.WithType(objectType)
 	}
 
+	last, err := strconv.Atoi(c.Query("last", "0"))
+	if err == nil && last != 0 {
+		filter = filter.WithLastNDays(last)
+	}
+
 	dFilter := datefilter.NewDateFilter(c.Query("startDate", ""), c.Query("endDate", ""))
 	if dFilter.IsStartValid {
 		filter = filter.WithStartDate(dFilter.Start)
@@ -323,61 +434,19 @@ func getFilterFromRequest(c *fiber.Ctx) result.Filter {
 	return filter
 }
 
-// loadDefaultExecutors loads default executors
-func (s TestkubeAPI) loadDefaultExecutors(namespace, data string) (initImage string, err error) {
-	var executors []testkube.ExecutorDetails
+func (s TestkubeAPI) getSlackLoader() *slack.SlackLoader {
+	messageTemplate := os.Getenv("SLACK_TEMPLATE")
 
-	if data == "" {
-		return "", nil
-	}
-
-	dataDecoded, err := base64.StdEncoding.DecodeString(data)
+	templateDecoded, err := base64.StdEncoding.DecodeString(messageTemplate)
 	if err != nil {
-		return "", err
+		s.Log.Errorw("error while decoding slack template", "error", err.Error())
 	}
 
-	if err := json.Unmarshal([]byte(dataDecoded), &executors); err != nil {
-		return "", err
+	configString := os.Getenv("SLACK_CONFIG")
+	configDecoded, err := base64.StdEncoding.DecodeString(configString)
+	if err != nil {
+		s.Log.Errorw("error while decoding slack config", "error", err.Error())
 	}
 
-	for _, executor := range executors {
-		if executor.Executor == nil {
-			continue
-		}
-
-		if executor.Name == "executor-init" {
-			initImage = executor.Executor.Image
-			continue
-		}
-
-		obj := &executorv1.Executor{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      executor.Name,
-				Namespace: namespace,
-			},
-			Spec: executorv1.ExecutorSpec{
-				Types:        executor.Executor.Types,
-				ExecutorType: executor.Executor.ExecutorType,
-				Image:        executor.Executor.Image,
-			},
-		}
-
-		result, err := s.ExecutorsClient.Get(executor.Name)
-		if err != nil && !errors.IsNotFound(err) {
-			return "", err
-		}
-
-		if err != nil {
-			if _, err = s.ExecutorsClient.Create(obj); err != nil {
-				return "", err
-			}
-		} else {
-			result.Spec = obj.Spec
-			if _, err = s.ExecutorsClient.Update(result); err != nil {
-				return "", err
-			}
-		}
-	}
-
-	return initImage, nil
+	return slack.NewSlackLoader(string(templateDecoded), string(configDecoded), testkube.AllEventTypes)
 }

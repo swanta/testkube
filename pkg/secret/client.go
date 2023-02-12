@@ -4,16 +4,28 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/kubeshop/testkube/pkg/k8sclient"
-	"github.com/kubeshop/testkube/pkg/log"
 	"go.uber.org/zap"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	corev1 "k8s.io/client-go/applyconfigurations/core/v1"
 	"k8s.io/client-go/kubernetes"
+
+	"github.com/kubeshop/testkube/pkg/k8sclient"
+	"github.com/kubeshop/testkube/pkg/log"
 )
 
 const testkubeTestSecretLabel = "tests-secrets"
+
+//go:generate mockgen -destination=./mock_client.go -package=secret "github.com/kubeshop/testkube/pkg/secret" Interface
+type Interface interface {
+	Get(id string) (map[string]string, error)
+	List() (map[string]map[string]string, error)
+	Create(id string, labels, stringData map[string]string) error
+	Apply(id string, labels, stringData map[string]string) error
+	Update(id string, labels, stringData map[string]string) error
+	Delete(id string) error
+	DeleteAll(selector string) error
+}
 
 // Client provide methods to manage secrets
 type Client struct {

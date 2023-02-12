@@ -1,20 +1,26 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/gofiber/adaptor/v2"
 	"github.com/gofiber/fiber/v2"
-	"github.com/kubeshop/testkube/pkg/log"
-	"github.com/kubeshop/testkube/pkg/problem"
+	"github.com/gofiber/fiber/v2/middleware/pprof"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
+
+	"github.com/kubeshop/testkube/pkg/log"
+	"github.com/kubeshop/testkube/pkg/problem"
 )
 
 // NewServer returns new HTTP server instance, initializes logger and metrics
 func NewServer(config Config) HTTPServer {
+	config.Http.DisableStartupMessage = true
+
 	s := HTTPServer{
-		Mux:    fiber.New(),
+		Mux:    fiber.New(config.Http),
 		Log:    log.DefaultLogger,
 		Config: config,
 	}
@@ -39,6 +45,8 @@ func (s *HTTPServer) Init() {
 		s.Log.Debugw("request", "method", string(c.Request().Header.Method()), "path", c.Request().URI().String())
 		return c.Next()
 	})
+
+	s.Mux.Use(pprof.New())
 
 	// server generic endpoints
 	s.Mux.Get("/health", s.HealthEndpoint())
@@ -84,6 +92,17 @@ func (s *HTTPServer) getProblemMessage(err error, context ...interface{}) string
 }
 
 // Run starts listening for incoming connetions
-func (s HTTPServer) Run() error {
+func (s *HTTPServer) Run(ctx context.Context) error {
+	// this function listens for finished context and calls graceful shutdown on the API server
+	go func() {
+		select {
+		case <-ctx.Done():
+			// sleep 2 seconds to cover the edge case if SIGTERM or SIGKILL signal occurs before the server is started,
+			// so the application does not get stuck
+			time.Sleep(2 * time.Second)
+			s.Log.Infof("shutting down Testkube API server")
+			_ = s.Mux.Shutdown()
+		}
+	}()
 	return s.Mux.Listen(s.Config.Addr())
 }

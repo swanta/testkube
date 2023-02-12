@@ -4,7 +4,7 @@
 package content
 
 import (
-	"io/ioutil"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -32,7 +32,7 @@ func TestFetcher(t *testing.T) {
 		assert.NoError(t, err)
 		assert.FileExists(t, path)
 
-		d, err := ioutil.ReadFile(path)
+		d, err := os.ReadFile(path)
 		assert.NoError(t, err)
 		assert.Equal(t, string(fileContent), string(d))
 	})
@@ -48,7 +48,7 @@ func TestFetcher(t *testing.T) {
 		assert.NoError(t, err)
 		assert.FileExists(t, path)
 
-		d, err := ioutil.ReadFile(path)
+		d, err := os.ReadFile(path)
 		assert.NoError(t, err)
 		assert.Equal(t, string(fileContent), string(d))
 	})
@@ -79,5 +79,15 @@ func TestFetcher(t *testing.T) {
 		assert.NoError(t, err)
 		assert.FileExists(t, filepath.Join(path, "example.json"))
 		assert.FileExists(t, filepath.Join(path, "example2.json"))
+	})
+
+	t.Run("test fetch no content", func(t *testing.T) {
+		content := &testkube.TestContent{
+			Type_: string(testkube.TestContentTypeEmpty),
+		}
+
+		path, err := f.Fetch(content)
+		assert.NoError(t, err)
+		assert.Equal(t, "", path)
 	})
 }

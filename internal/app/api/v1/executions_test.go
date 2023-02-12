@@ -7,10 +7,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kubeshop/testkube/pkg/repository/result"
+
 	"github.com/gofiber/fiber/v2"
 	"github.com/stretchr/testify/assert"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	k8sclient "sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	"github.com/kubeshop/testkube/internal/pkg/api/repository/result"
+	executorv1 "github.com/kubeshop/testkube-operator/apis/executor/v1"
+	executorsclientv1 "github.com/kubeshop/testkube-operator/client/executors/v1"
 	"github.com/kubeshop/testkube/pkg/api/v1/testkube"
 	"github.com/kubeshop/testkube/pkg/executor/client"
 	"github.com/kubeshop/testkube/pkg/executor/output"
@@ -18,53 +25,18 @@ import (
 	"github.com/kubeshop/testkube/pkg/server"
 )
 
-func TestParamsNilAssign(t *testing.T) {
-
-	t.Run("merge two maps", func(t *testing.T) {
-
-		p1 := map[string]testkube.Variable{"p1": testkube.NewBasicVariable("p1", "1")}
-		p2 := map[string]testkube.Variable{"p2": testkube.NewBasicVariable("p2", "2")}
-
-		out := mergeVariables(p1, p2)
-
-		assert.Equal(t, 2, len(out))
-		assert.Equal(t, "1", out["p1"].Value)
-	})
-
-	t.Run("merge two maps with override", func(t *testing.T) {
-
-		p1 := map[string]testkube.Variable{"p1": testkube.NewBasicVariable("p1", "1")}
-		p2 := map[string]testkube.Variable{"p1": testkube.NewBasicVariable("p1", "2")}
-
-		out := mergeVariables(p1, p2)
-
-		assert.Equal(t, 1, len(out))
-		assert.Equal(t, "2", out["p1"].Value)
-	})
-
-	t.Run("merge with nil map", func(t *testing.T) {
-
-		p2 := map[string]testkube.Variable{"p2": testkube.NewBasicVariable("p2", "2")}
-
-		out := mergeVariables(nil, p2)
-
-		assert.Equal(t, 1, len(out))
-		assert.Equal(t, "2", out["p2"].Value)
-	})
-
-}
-
 func TestTestkubeAPI_ExecutionLogsHandler(t *testing.T) {
 	app := fiber.New()
 	resultRepo := MockExecutionResultsRepository{}
-	executor := MockExecutor{}
+	executor := &MockExecutor{}
 	s := &TestkubeAPI{
 		HTTPServer: server.HTTPServer{
 			Mux: app,
 			Log: log.DefaultLogger,
 		},
 		ExecutionResults: &resultRepo,
-		Executor:         &executor,
+		ExecutorsClient:  getMockExecutorClient(),
+		Executor:         executor,
 	}
 	app.Get("/executions/:executionID/logs", s.ExecutionLogsHandler())
 
@@ -94,7 +66,8 @@ func TestTestkubeAPI_ExecutionLogsHandler(t *testing.T) {
 			route:        "/executions/running-1234/logs",
 			expectedCode: 200,
 			execution: testkube.Execution{
-				Id: "running-1234",
+				Id:       "running-1234",
+				TestType: "curl/test",
 				ExecutionResult: &testkube.ExecutionResult{
 					Status: testkube.StatusPtr(testkube.RUNNING_ExecutionStatus),
 				},
@@ -178,6 +151,10 @@ func (r MockExecutionResultsRepository) GetExecutionTotals(ctx context.Context, 
 	panic("not implemented")
 }
 
+func (r MockExecutionResultsRepository) GetNextExecutionNumber(ctx context.Context, testName string) (int32, error) {
+	panic("not implemented")
+}
+
 func (r MockExecutionResultsRepository) Insert(ctx context.Context, result testkube.Execution) error {
 	panic("not implemented")
 }
@@ -186,7 +163,7 @@ func (r MockExecutionResultsRepository) Update(ctx context.Context, result testk
 	panic("not implemented")
 }
 
-func (r MockExecutionResultsRepository) UpdateResult(ctx context.Context, id string, execution testkube.ExecutionResult) error {
+func (r MockExecutionResultsRepository) UpdateResult(ctx context.Context, id string, execution testkube.Execution) error {
 	panic("not implemented")
 }
 
@@ -194,7 +171,7 @@ func (r MockExecutionResultsRepository) StartExecution(ctx context.Context, id s
 	panic("not implemented")
 }
 
-func (r MockExecutionResultsRepository) EndExecution(ctx context.Context, id string, endTime time.Time, duration time.Duration) error {
+func (r MockExecutionResultsRepository) EndExecution(ctx context.Context, execution testkube.Execution) error {
 	panic("not implemented")
 }
 
@@ -206,6 +183,10 @@ func (r MockExecutionResultsRepository) DeleteByTest(ctx context.Context, testNa
 	panic("not implemented")
 }
 
+func (r MockExecutionResultsRepository) DeleteByTestSuite(ctx context.Context, testSuiteName string) error {
+	panic("not implemented")
+}
+
 func (r MockExecutionResultsRepository) DeleteAll(ctx context.Context) error {
 	panic("not implemented")
 }
@@ -214,33 +195,67 @@ func (r MockExecutionResultsRepository) DeleteByTests(ctx context.Context, testN
 	panic("not implemented")
 }
 
+func (r MockExecutionResultsRepository) DeleteByTestSuites(ctx context.Context, testSuiteNames []string) error {
+	panic("not implemented")
+}
+
+func (r MockExecutionResultsRepository) DeleteForAllTestSuites(ctx context.Context) error {
+	panic("not implemented")
+}
+
+func (r MockExecutionResultsRepository) GetTestMetrics(ctx context.Context, name string, limit, last int) (testkube.ExecutionsMetrics, error) {
+	panic("not implemented")
+}
+
 type MockExecutor struct {
 	LogsFn func(id string) (chan output.Output, error)
 }
 
-func (e MockExecutor) Watch(id string) chan client.ResultEvent {
+func (e MockExecutor) Execute(ctx context.Context, execution *testkube.Execution, options client.ExecuteOptions) (*testkube.ExecutionResult, error) {
 	panic("not implemented")
 }
 
-func (e MockExecutor) Get(id string) (testkube.ExecutionResult, error) {
+func (e MockExecutor) ExecuteSync(ctx context.Context, execution *testkube.Execution, options client.ExecuteOptions) (*testkube.ExecutionResult, error) {
 	panic("not implemented")
 }
 
-func (e MockExecutor) Execute(execution testkube.Execution, options client.ExecuteOptions) (testkube.ExecutionResult, error) {
+func (e MockExecutor) Abort(ctx context.Context, execution *testkube.Execution) (*testkube.ExecutionResult, error) {
 	panic("not implemented")
 }
 
-func (e MockExecutor) ExecuteSync(execution testkube.Execution, options client.ExecuteOptions) (testkube.ExecutionResult, error) {
-	panic("not implemented")
-}
-
-func (e MockExecutor) Abort(id string) error {
-	panic("not implemented")
-}
-
-func (e MockExecutor) Logs(id string) (chan output.Output, error) {
+func (e MockExecutor) Logs(ctx context.Context, id string) (chan output.Output, error) {
 	if e.LogsFn == nil {
 		panic("not implemented")
 	}
 	return e.LogsFn(id)
+}
+
+func getMockExecutorClient() *executorsclientv1.ExecutorsClient {
+	scheme := runtime.NewScheme()
+	executorv1.AddToScheme(scheme)
+
+	initObjects := []k8sclient.Object{
+		&executorv1.Executor{
+			TypeMeta: metav1.TypeMeta{
+				Kind:       "Executor",
+				APIVersion: "executor.testkube.io/v1",
+			},
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "sample",
+				Namespace: "default",
+			},
+			Spec: executorv1.ExecutorSpec{
+				Types:        []string{"curl/test"},
+				ExecutorType: "",
+				JobTemplate:  "",
+			},
+			Status: executorv1.ExecutorStatus{},
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(initObjects...).
+		Build()
+	return executorsclientv1.NewClient(fakeClient, "")
 }

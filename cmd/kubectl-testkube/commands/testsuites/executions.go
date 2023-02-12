@@ -4,11 +4,12 @@ import (
 	"os"
 	"strings"
 
+	"github.com/spf13/cobra"
+
 	"github.com/kubeshop/testkube/cmd/kubectl-testkube/commands/common"
 	"github.com/kubeshop/testkube/cmd/kubectl-testkube/commands/common/render"
 	"github.com/kubeshop/testkube/cmd/kubectl-testkube/commands/testsuites/renderer"
 	"github.com/kubeshop/testkube/pkg/ui"
-	"github.com/spf13/cobra"
 )
 
 func NewTestSuiteExecutionCmd() *cobra.Command {
@@ -36,7 +37,8 @@ func NewTestSuiteExecutionCmd() *cobra.Command {
 			} else {
 				client, _ := common.GetClient(cmd)
 
-				executions, err := client.ListTestSuiteExecutions(testSuiteName, limit, strings.Join(selectors, ","))
+				executions, err := client.ListTestSuiteExecutions(testSuiteName, limit,
+					strings.Join(selectors, ","))
 				ui.ExitOnError("getting test suites executions list", err)
 				err = render.List(cmd, executions, os.Stdout)
 				ui.ExitOnError("rendering list", err)

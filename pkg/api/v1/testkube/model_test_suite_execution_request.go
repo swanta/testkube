@@ -13,13 +13,24 @@ package testkube
 type TestSuiteExecutionRequest struct {
 	// test execution custom name
 	Name string `json:"name,omitempty"`
+	// test suite execution number
+	Number int32 `json:"number,omitempty"`
 	// test kubernetes namespace (\"testkube\" when not set)
 	Namespace string              `json:"namespace,omitempty"`
 	Variables map[string]Variable `json:"variables,omitempty"`
-	// execution labels
+	// secret uuid
+	SecretUUID string `json:"secretUUID,omitempty"`
+	// test suite labels
 	Labels map[string]string `json:"labels,omitempty"`
+	// execution labels
+	ExecutionLabels map[string]string `json:"executionLabels,omitempty"`
+	// whether to start execution sync or async
+	Sync bool `json:"sync,omitempty"`
 	// http proxy for executor containers
 	HttpProxy string `json:"httpProxy,omitempty"`
 	// https proxy for executor containers
 	HttpsProxy string `json:"httpsProxy,omitempty"`
+	// duration in seconds the test suite may be active, until its stopped
+	Timeout        int32               `json:"timeout,omitempty"`
+	ContentRequest *TestContentRequest `json:"contentRequest,omitempty"`
 }

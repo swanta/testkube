@@ -50,6 +50,7 @@ func SuccessAndExit(message string, subMessages ...string) {
 	ui.SuccessAndExit(message, subMessages...)
 }
 func Warn(message string, subMessages ...string)  { ui.Warn(message, subMessages...) }
+func Alert(message string, subMessages ...string) { ui.Alert(message, subMessages...) }
 func LogLine(message string)                      { ui.LogLine(message) }
 func Debug(message string, subMessages ...string) { ui.Debug(message, subMessages...) }
 func Info(message string, subMessages ...string)  { ui.Info(message, subMessages...) }
@@ -60,6 +61,10 @@ func Failf(err string, params ...interface{})     { ui.Failf(err, params...) }
 func CommandOutput(output []byte, command string, params ...string) {
 	ui.CommandOutput(output, command, params...)
 }
+func Print(message string, subMessages ...string)           { ui.Print(message, subMessages...) }
+func Printf(format string, data ...any)                     { ui.Printf(format, data...) }
+func PrintEnabled(message string, subMessages ...string)    { ui.PrintEnabled(message, subMessages...) }
+func PrintDisabled(message string, subMessages ...string)   { ui.PrintDisabled(message, subMessages...) }
 func Medal()                                                { ui.Medal() }
 func Completed(message string, subMessages ...string)       { ui.Completed(message, subMessages...) }
 func GroupCompleted(main string, sub ...string)             { ui.GroupCompleted(main, sub...) }
@@ -69,6 +74,7 @@ func ShellCommand(title string, commands ...string)         { ui.ShellCommand(ti
 func Table(tableData TableData, writer io.Writer)           { ui.Table(tableData, writer) }
 func JSONTable(tableData TableData, writer io.Writer) error { return ui.JSONTable(tableData, writer) }
 func NewArrayTable(a [][]string) ArrayTable                 { return ui.NewArrayTable(a) }
+func Confirm(message string) bool                           { return ui.Confirm(message) }
 
 func UseStdout() { ui = uiOut }
 func UseStderr() { ui = uiErr }

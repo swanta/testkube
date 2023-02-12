@@ -1,9 +1,10 @@
 package oauth
 
 import (
+	"github.com/spf13/cobra"
+
 	"github.com/kubeshop/testkube/cmd/kubectl-testkube/config"
 	"github.com/kubeshop/testkube/pkg/ui"
-	"github.com/spf13/cobra"
 )
 
 // NewEnableOAuthCmd is oauth enable command
@@ -12,14 +13,20 @@ func NewEnableOAuthCmd() *cobra.Command {
 		Use:   "oauth",
 		Short: "enable oauth authentication for direct api",
 		Run: func(cmd *cobra.Command, args []string) {
+			ui.NL()
+			ui.Print(ui.IconRocket + "  Enabling OAuth authentication for direct api")
 			cfg, err := config.Load()
-			ui.ExitOnError("loading config file", err)
-
-			cfg.EnableOAuth()
-
-			err = config.Save(cfg)
-			ui.ExitOnError("saving config file", err)
-			ui.Success("OAuth", "enabled")
+			if err == nil {
+				cfg.EnableOAuth()
+				err = config.Save(cfg)
+			}
+			if err != nil {
+				ui.PrintDisabled("OAuth", "failed")
+				ui.PrintConfigError(err)
+			} else {
+				ui.PrintEnabled("OAuth", "enabled")
+			}
+			ui.NL()
 		},
 	}
 

@@ -3,7 +3,7 @@ package v1
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 
 	"github.com/gofiber/fiber/v2"
@@ -51,6 +51,10 @@ func (s TestkubeAPI) OauthHandler() fiber.Handler {
 			return s.Error(c, http.StatusBadRequest, fmt.Errorf("Code was not provided"))
 		}
 
+		if SlackBotClientID == "" && SlackBotClientSecret == "" {
+			return s.Error(c, http.StatusInternalServerError, fmt.Errorf("\nSlack secrets are not set\n"))
+		}
+
 		var slackClient = thttp.NewClient()
 
 		req, err := http.NewRequest(http.MethodGet, slackAccessUrl, nil)
@@ -70,7 +74,7 @@ func (s TestkubeAPI) OauthHandler() fiber.Handler {
 		}
 		defer resp.Body.Close()
 
-		body, err := ioutil.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
 
 		if err != nil {
 			return s.Error(c, http.StatusInternalServerError, fmt.Errorf("\nInvalid format for access token: %+v", err))

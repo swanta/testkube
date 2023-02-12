@@ -16,11 +16,19 @@ type Repository struct {
 	// uri of content file or git directory
 	Uri string `json:"uri"`
 	// branch/tag name for checkout
-	Branch string `json:"branch"`
+	Branch string `json:"branch,omitempty"`
+	// commit id (sha) for checkout
+	Commit string `json:"commit,omitempty"`
 	// if needed we can checkout particular path (dir or file) in case of BIG/mono repositories
 	Path string `json:"path,omitempty"`
 	// git auth username for private repositories
 	Username string `json:"username,omitempty"`
 	// git auth token for private repositories
-	Token string `json:"token,omitempty"`
+	Token          string     `json:"token,omitempty"`
+	UsernameSecret *SecretRef `json:"usernameSecret,omitempty"`
+	TokenSecret    *SecretRef `json:"tokenSecret,omitempty"`
+	// secret with certificate for private repositories
+	CertificateSecret string `json:"certificateSecret,omitempty"`
+	// if provided we checkout the whole repository and run test from this directory
+	WorkingDir string `json:"workingDir,omitempty"`
 }
